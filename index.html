@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GCR HAR Visualization Tool</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+    <!-- Upload Screen -->
+    <div id="upload-screen">
+        <div class="upload-title">🎙️ GCR HAR Visualization Tool</div>
+        <div class="upload-subtitle">
+            Analyze Voice Live / Realtime API WebSocket sessions from browser HAR captures.
+            Visualize event timelines, conversation flow, VAD behavior, and diagnostic insights.
+        </div>
+        <div class="drop-zone" id="drop-zone">
+            <div class="drop-zone-icon">📁</div>
+            <div class="drop-zone-text">
+                Drop a <strong>.har</strong> file here or click to browse
+            </div>
+        </div>
+        <input type="file" id="file-input" accept=".har">
+        <div class="upload-hint">
+            💡 Capture HAR: Browser DevTools → Network → Right-click → Save all as HAR with content
+        </div>
+        <div class="upload-hint" style="color:var(--orange)">
+            ⚠️ HAR files are processed entirely in your browser. No data leaves your machine.
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="main-app">
+        <!-- Security Banner -->
+        <div class="security-banner">
+            🔒 All data is processed locally in your browser. Nothing is uploaded to any server.
+        </div>
+
+        <!-- Top Bar -->
+        <div class="top-bar">
+            <span class="top-bar-title">🎙️ GCR HAR Visualizer</span>
+            <span class="top-bar-file" id="top-bar-file"></span>
+            <div class="top-bar-stats" id="top-bar-stats"></div>
+            <button class="btn" id="btn-new-file">Open New File</button>
+        </div>
+
+        <!-- Tab Bar -->
+        <div class="tab-bar">
+            <div class="tab active" data-tab="overview">Overview</div>
+            <div class="tab" data-tab="timeline">Timeline</div>
+            <div class="tab" data-tab="conversation">Conversation</div>
+            <div class="tab" data-tab="responses">Responses</div>
+        </div>
+
+        <!-- Content -->
+        <div class="content-area">
+            <div class="tab-panel active" id="panel-overview">
+                <div id="overview-content"></div>
+            </div>
+            <div class="tab-panel" id="panel-timeline">
+                <div id="timeline-content"></div>
+            </div>
+            <div class="tab-panel" id="panel-conversation">
+                <div id="conversation-content"></div>
+            </div>
+            <div class="tab-panel" id="panel-responses">
+                <div id="responses-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="js/app.js"></script>
+</body>
+
+</html>
