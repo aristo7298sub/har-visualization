@@ -1,124 +1,108 @@
 ---
 name: har2md
-description: Voice Live / Realtime API 的 HAR 文件分析工具集。包含浏览器可视化（Swim Lane 时间线 + Minimap）和 CLI 转 Markdown 两种方式。用于调查语音截断、VAD 误判、AEC 失效、取消率异常等问题。
+description: 将 Voice Live / Realtime API 的 HAR 文件转为结构化 Markdown 报告并分析。支持两种模式：分析模式（过滤关键事件 + 诊断建议）和 Raw 模式（完整事件 dump）。用于调查语音截断、VAD 误判、AEC 失效、取消率异常。
+argument-hint: <har-file-path> [--raw]
 ---
 
-# HAR 分析工具集 — Voice Live / Realtime API
+# HAR → Markdown 转换与分析
 
-## 工具总览
+将客户提供的 HAR 文件转为结构化 Markdown，提取关键信息并分析诊断。
 
-| 工具 | 形式 | 用途 | 路径 |
+## 执行流程
+
+### 1. 转换 HAR → Markdown
+
+脚本位置：`har_to_md.py`（本 skill 同级项目根目录）
+
+**分析模式**（默认，过滤高频事件，输出诊断建议）：
+```bash
+python har_to_md.py $ARGUMENTS
+```
+
+**Raw 模式**（完整事件 dump，含截断的 audio payload，适合深度分析）：
+```bash
+python har_to_md.py $ARGUMENTS --raw
+```
+
+**指定输出路径**：
+```bash
+python har_to_md.py <input.har> --output <output.md>
+```
+
+**仅分析指定 session**：
+```bash
+python har_to_md.py <input.har> --session-id sess_xxx
+```
+
+无外部依赖，仅使用 Python 标准库。
+
+### 2. 读取报告并提取关键信息
+
+转换完成后，读取生成的 .md 文件，关注以下模块：
+
+| 模块 | 关注点 |
+|------|--------|
+| Session 配置 | VAD 类型/参数、是否启用 AEC、降噪、Voice 名称、Rate |
+| 统计总览 | 取消率（>30% 异常）、VAD speech_started 触发次数 |
+| Response 生命周期 | 哪些被 cancelled、有无 audio_deltas、speech_started_during |
+| 对话流 | 用户实际说了什么、Agent 回复了什么、哪些被截断 |
+| 事件时间线 | speech_started 与 response.audio.delta 的时间关系 |
+| 诊断建议 | 脚本自动生成的初步建议 |
+
+### 3. 深入分析（基于报告内容）
+
+按以下清单逐项检查：
+
+**取消率**：
+- 0-token cancelled + reason=turn_detected → 正常 barge-in
+- 有 audio_deltas + cancelled → 用户已听到部分内容后被截断（异常）
+- 大量 0-token cancelled → VAD 过灵敏或环境噪音
+
+**AEC / 回声**：
+- completed response 期间触发 speech_started → AEC 可能失效
+- 确认是否启用了 `server_echo_cancellation`
+
+**音频截断**：
+- transcript.done=True 但 audio.done=False → 服务端音频流中断
+
+**VAD 配置**：
+- `silence_duration_ms` < 300 → 可能过灵敏
+- `auto_truncate: false` + 有取消 → 对话历史可能不一致
+
+### 4. 输出结论
+
+```markdown
+## HAR 分析结论
+
+### 基本信息
+- Session ID: ...
+- 总事件数: ... | Response 数: ... | 取消率: ...%
+
+### 发现的问题
+1. [🔴/⚠️/ℹ️] 问题描述 — 证据 — 建议
+
+### 对话内容摘要
+1. 用户: ...
+2. Agent: ...
+
+### 建议操作
+- ...
+```
+
+## 诊断模式速查
+
+| 模式 | 表现 | 原因 | 建议 |
 |------|------|------|------|
-| **HAR Visualizer** | 浏览器 SPA | 交互式可视化（Swim Lane 时间线、Minimap、事件过滤） | `index.html` |
-| **har_to_md.py** | Python CLI | HAR → 结构化 Markdown 报告（存档 / Copilot 分析） | `har_to_md.py` |
+| speech_started 紧跟 audio.delta | Agent 说话时 VAD 触发 | AEC 失效 | 启用 server_echo_cancellation |
+| 大量 0-token cancelled | 模型没开口就被取消 | VAD 过灵敏 | 增大 silence_duration_ms |
+| 高 token cancelled | 长句被截断 | 用户打断 / AEC 延迟 | 正常或优化 AEC |
+| speech_started >> response 数 | VAD 过度触发 | 设备 / 无 AEC | 启用 AEC + 降噪 |
+| transcript.done 无 audio.done | 音频截断 | Backend 问题 | 查后端日志 |
+| auto_truncate=false + cancelled | 对话历史不一致 | 配置缺失 | 开启 auto_truncate |
 
-## 何时使用
+## 后续深入（可选）
 
-当客户提供了浏览器 HAR (HTTP Archive) 文件，需要分析 Voice Live 或 Realtime API 的 WebSocket 事件时：
-- 语音播报被截断 / 提前结束
-- VAD（语音活动检测）误触发
-- 回声消除 (AEC) 失效导致自打断
-- 需要确认 session 配置、模型、voice 等参数
-- 需要查看对话转写内容
-- 需要统计 response 完成/取消比例
-
-## 工具 1：HAR Visualizer（浏览器可视化）
-
-### 启动
-
-```bash
-cd project/har-visualization
-python -m http.server 8066
-# 打开 http://localhost:8066
-```
-
-### 功能
-
-- **Overview** — 连接参数、Session 配置、统计总览、诊断告警
-- **Timeline** — 8 条 Swim Lane + Minimap 全局导航 + 1x–200x 缩放
-- **Conversation** — 聊天气泡视图（用户 + Agent + 取消标记）
-- **Responses** — Response 生命周期表（Duration / Tokens / audio.done / speech 打断）
-- **Event Log** — 可切换高频事件、点击查看 JSON、可拖拽调整列宽
-
-## 工具 2：har_to_md.py（CLI）
-
-### 用法
-
-```bash
-# 基本用法 — 输出同名 .md 文件
-python har_to_md.py customer_capture.har
-
-# 指定输出
-python har_to_md.py customer_capture.har --output analysis.md
-
-# 完整 Raw 事件 dump（audio payload 截断至 40 字符）
-python har_to_md.py customer_capture.har --raw
-
-# 仅分析指定 session
-python har_to_md.py customer_capture.har --session-id sess_xxx
-```
-
-**无外部依赖**，仅使用 Python 标准库。
-
-### 输出报告包含
-
-| 模块 | 内容 |
-|------|------|
-| 连接参数 | WebSocket URL, api-version, model, agent-name |
-| Session 配置 | VAD 类型/参数、AEC、降噪、Voice、Rate、Transcription model |
-| 统计总览 | 总事件数、Response 完成/取消数、取消率、VAD 触发次数 |
-| Response 生命周期 | ID、状态、异常模式检测（AEC 打断 / 音频截断） |
-| 对话流 | 用户输入 + Agent 回复 |
-| 事件时间线 | 过滤 audio delta 后的关键事件流 |
-| 诊断建议 | 基于统计自动生成 |
-
-## 典型工作流
-
-```
-1. 客户提供 HAR 文件
-   └─ 浏览器 DevTools → Network → 右键 → Save all as HAR with content
-
-2. 快速交互分析 → Visualizer
-   └─ python -m http.server 8066 → 上传 HAR → Timeline + Responses
-
-3. 存档报告 → har_to_md.py
-   └─ python har_to_md.py customer.har
-   └─ --raw 模式可供 Copilot/Claude 深入分析
-
-4. 结合 Kusto 后端日志
-   ├─ session_id → TraceCallResult (cogsvc)
-   ├─ response_id → VoiceLive_ResponseDone
-   └─ 对比前后端事件时间差
-```
-
-## HAR 获取方法（给客户）
-
-### Chrome / Edge
-1. F12 → Network
-2. 使用 Voice Live 对话
-3. 右键 → **Save all as HAR with content**
-
-### Firefox
-1. F12 → Network → 齿轮 → **Save All as HAR**
-
-> ⚠️ HAR 可能含 Bearer token，提醒客户脱敏。大文件建议压缩发送。
-
-## 关键事件参考
-
-| 事件 | 方向 | 含义 |
-|------|------|------|
-| `input_audio_buffer.speech_started` | server→client | VAD 检测到说话 |
-| `input_audio_buffer.speech_stopped` | server→client | VAD 检测到静音 |
-| `response.cancel` | client→server | 客户端主动取消 |
-| `conversation.item.truncate` | client→server | 截断未播放音频 |
-| `response.done` (status=cancelled) | server→client | 回复取消确认 |
-
-## 诊断模式
-
-| 模式 | 表现 | 可能原因 |
-|------|------|---------|
-| speech_started 紧跟 audio.delta | VAD 在 Agent 说话时触发 | AEC 失效 / 回声 |
-| 大量 0-token cancelled | 模型没开口就被取消 | VAD 过灵敏 / 噪音 |
-| 高 token cancelled | 长句说一半被截断 | 用户打断 / AEC 延迟 |
-| speech_started >> response 数 | VAD 过度触发 | 设备问题 / 无 AEC |
-| transcript.done 无 audio.done | 服务端音频截断 | Backend 问题 |
+结合 Kusto 后端日志：
+- `session_id` → TraceCallResult（cogsvc）
+- `response_id` → VoiceLive_ResponseDone
+- 对比前后端事件时间差
