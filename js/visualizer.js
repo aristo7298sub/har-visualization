@@ -44,6 +44,8 @@ export class Visualizer {
         this.hiddenLanes = new Set();
         this.showEventList = true;
         this.zoomLevel = 1;   // 1 = fit, 2 = 2x, etc.
+        this._filterLaneIds = new Set();   // active lane filters for Event Log (multi-select)
+        this._boxSelectedIdxs = null; // Set of indices from box-select
     }
 
     init(messages, stats, filename) {
@@ -168,6 +170,8 @@ export class Visualizer {
                     <div class="event-list-toggle" id="event-list-toggle">▼ Event Log</div>
                     <div style="padding:6px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px;font-size:13px;color:var(--text-secondary)">
                         <label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="sl-show-hf"> Show high-frequency events (audio.append, audio.delta, transcript.delta)</label>
+                        <button class="sl-filter-clear" id="sl-filter-clear" style="display:none;margin-left:8px;padding:2px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--orange-light);color:var(--orange);font-size:12px;cursor:pointer;font-weight:600">✕ Clear Filter</button>
+                        <span id="sl-filter-label" style="display:none;font-size:12px;color:var(--orange);font-weight:600"></span>
                         <span id="sl-log-count" style="margin-left:auto;font-size:12px;color:var(--text-muted)"></span>
                     </div>
                     <div class="event-list" id="event-list"></div>
@@ -178,9 +182,24 @@ export class Visualizer {
         this._renderMinimap();
         this._renderEventList();
 
-        // Bind controls
+        // Bind controls — lane buttons: click=filter Event Log (multi-select), right-click=toggle visibility
         container.querySelectorAll('.sl-btn[data-lane]').forEach(btn => {
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', (e) => {
+                const lid = btn.dataset.lane;
+                // Toggle this lane in Event Log filter (multi-select)
+                this._boxSelectedIdxs = null;
+                if (this._filterLaneIds.has(lid)) {
+                    this._filterLaneIds.delete(lid);
+                    btn.classList.remove('filter-active');
+                } else {
+                    this._filterLaneIds.add(lid);
+                    btn.classList.add('filter-active');
+                }
+                this._renderEventList();
+            });
+            // Right-click to toggle lane visibility
+            btn.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
                 const lid = btn.dataset.lane;
                 this.hiddenLanes.has(lid) ? this.hiddenLanes.delete(lid) : this.hiddenLanes.add(lid);
                 btn.classList.toggle('active');
@@ -203,6 +222,18 @@ export class Visualizer {
         document.getElementById('sl-show-hf').addEventListener('change', () => {
             this._renderEventList();
         });
+
+        // Clear filter button
+        document.getElementById('sl-filter-clear').addEventListener('click', () => {
+            this._filterLaneIds.clear();
+            this._boxSelectedIdxs = null;
+            container.querySelectorAll('.sl-btn[data-lane]').forEach(b => b.classList.remove('filter-active'));
+            document.querySelectorAll('.sl-event.box-selected').forEach(d => d.classList.remove('box-selected'));
+            this._renderEventList();
+        });
+
+        // Box-select on timeline
+        this._initBoxSelect();
 
         // Zoom
         document.getElementById('sl-zoom-in').addEventListener('click', () => this._setZoom(this.zoomLevel * 2));
@@ -454,12 +485,39 @@ export class Visualizer {
         const listEl = document.getElementById('event-list');
         const showHF = document.getElementById('sl-show-hf')?.checked;
         const SKIP = showHF ? new Set() : new Set(['input_audio_buffer.append', 'response.audio.delta', 'response.audio_transcript.delta']);
-        const filtered = this.messages.filter(m => !SKIP.has(m.eventType));
+
+        // Apply filters: lane filter (multi-select) or box-select
+        let filtered;
+        let filterLabel = '';
+        if (this._boxSelectedIdxs) {
+            filtered = this.messages.filter((m, i) => this._boxSelectedIdxs.has(i) && !SKIP.has(m.eventType));
+            filterLabel = `Box selection: ${filtered.length} events`;
+        } else if (this._filterLaneIds.size > 0) {
+            // Collect all event types from selected lanes
+            const allowedTypes = new Set();
+            for (const lid of this._filterLaneIds) {
+                const lane = LANES.find(l => l.id === lid);
+                if (lane) lane.types.forEach(t => allowedTypes.add(t));
+            }
+            filtered = this.messages.filter(m => allowedTypes.has(m.eventType) && !SKIP.has(m.eventType));
+            const laneNames = [...this._filterLaneIds].map(lid => LANES.find(l => l.id === lid)?.label || lid).join(' + ');
+            filterLabel = `Filter: ${laneNames} — ${filtered.length} events`;
+        } else {
+            filtered = this.messages.filter(m => !SKIP.has(m.eventType));
+        }
+
+        const hasFilter = !!(this._filterLaneIds.size > 0 || this._boxSelectedIdxs);
+        const clearBtn = document.getElementById('sl-filter-clear');
+        const filterLabelEl = document.getElementById('sl-filter-label');
+        if (clearBtn) clearBtn.style.display = hasFilter ? 'inline-block' : 'none';
+        if (filterLabelEl) { filterLabelEl.style.display = hasFilter ? 'inline' : 'none'; filterLabelEl.textContent = filterLabel; }
+
         const countEl = document.getElementById('sl-log-count');
         if (countEl) countEl.textContent = `${filtered.length} / ${this.messages.length} events`;
         const frag = document.createDocumentFragment();
 
-        for (const msg of filtered) {
+        for (let seq = 0; seq < filtered.length; seq++) {
+            const msg = filtered[seq];
             const row = document.createElement('div');
             row.className = 'event-row';
             const cat = HarParser.classifyEvent(msg.eventType);
@@ -478,6 +536,7 @@ export class Visualizer {
             const dirIconClass = dir === 'send' ? 'send' : 'recv';
 
             row.innerHTML = `
+                <span class="event-seq">${seq + 1}</span>
                 <span class="event-ts">${HarParser.formatTimestamp(msg.timestamp)}</span>
                 ${dirBadge}
                 <span class="event-dir-icon ${dirIconClass}">${dirIcon}</span>
@@ -491,6 +550,106 @@ export class Visualizer {
         listEl.innerHTML = '';
         listEl.appendChild(frag);
         this._initColumnResize(listEl);
+    }
+
+    _initBoxSelect() {
+        const scrollContainer = document.getElementById('sl-scroll-container');
+        const inner = document.getElementById('sl-scroll-inner');
+        if (!scrollContainer || !inner) return;
+
+        let box = null, startX = 0, startY = 0, isDragging = false, dragLaneId = null;
+
+        scrollContainer.addEventListener('mousedown', (e) => {
+            // Only start box select on the lane tracks, not on event dots
+            if (e.target.classList.contains('sl-event') || e.target.closest('.sl-lane-label')) return;
+            const laneTrack = e.target.closest('.sl-lane-track');
+            if (!laneTrack && !e.target.closest('.sl-lane')) return;
+
+            // Detect which lane the drag starts on
+            dragLaneId = laneTrack ? laneTrack.dataset.lane : null;
+
+            isDragging = true;
+            const rect = inner.getBoundingClientRect();
+            startX = e.clientX - rect.left;
+            startY = e.clientY - rect.top;
+
+            box = document.createElement('div');
+            box.className = 'sl-box-select';
+            box.style.left = startX + 'px';
+            box.style.top = startY + 'px';
+            box.style.width = '0';
+            box.style.height = '0';
+            inner.appendChild(box);
+
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging || !box) return;
+            const rect = inner.getBoundingClientRect();
+            const curX = e.clientX - rect.left;
+            const curY = e.clientY - rect.top;
+            const x = Math.min(startX, curX);
+            const y = Math.min(startY, curY);
+            const w = Math.abs(curX - startX);
+            const h = Math.abs(curY - startY);
+            box.style.left = x + 'px';
+            box.style.top = y + 'px';
+            box.style.width = w + 'px';
+            box.style.height = h + 'px';
+        });
+
+        document.addEventListener('mouseup', (e) => {
+            if (!isDragging || !box) return;
+            isDragging = false;
+
+            const rect = inner.getBoundingClientRect();
+            const endX = e.clientX - rect.left;
+            const w = Math.abs(endX - startX);
+
+            box.remove();
+            box = null;
+
+            // Ignore tiny drags (clicks)
+            if (w < 5) return;
+
+            // Calculate time range from box x-coordinates
+            const innerWidth = inner.clientWidth - 170; // subtract label width
+            const leftPx = Math.min(startX, endX) - 170;
+            const rightPx = Math.max(startX, endX) - 170;
+            const leftPct = Math.max(0, leftPx / innerWidth);
+            const rightPct = Math.min(1, rightPx / innerWidth);
+            const dur = this._duration;
+            const tStart = this.stats.firstTimestamp + leftPct * dur;
+            const tEnd = this.stats.firstTimestamp + rightPct * dur;
+
+            // Find events in this time range that belong to the dragged lane
+            const selected = new Set();
+            for (let i = 0; i < this.messages.length; i++) {
+                const m = this.messages[i];
+                const ms = HarParser._tsToMs(m.timestamp);
+                if (ms < tStart || ms > tEnd) continue;
+                // If we know which lane the drag started on, only include that lane's events
+                if (dragLaneId) {
+                    if (eventToLane(m.eventType) !== dragLaneId) continue;
+                }
+                selected.add(i);
+            }
+
+            if (selected.size === 0) return;
+
+            this._filterLaneIds.clear();
+            this._boxSelectedIdxs = selected;
+            document.querySelectorAll('.sl-btn[data-lane]').forEach(b => b.classList.remove('filter-active'));
+
+            // Highlight selected dots
+            document.querySelectorAll('.sl-event').forEach(dot => {
+                const idx = parseInt(dot.dataset.idx);
+                dot.classList.toggle('box-selected', selected.has(idx));
+            });
+
+            this._renderEventList();
+        });
     }
 
     _initColumnResize(listEl) {

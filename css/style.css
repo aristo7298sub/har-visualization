@@ -499,6 +499,27 @@ body {
     border-color: var(--accent);
 }
 
+.sl-btn.filter-active {
+    background: var(--orange);
+    color: #fff;
+    border-color: var(--orange);
+    box-shadow: 0 0 0 2px var(--orange-light);
+}
+
+.sl-box-select {
+    position: absolute;
+    background: rgba(9, 105, 218, 0.12);
+    border: 1.5px dashed var(--accent);
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.sl-event.box-selected {
+    box-shadow: 0 0 0 3px var(--orange);
+    z-index: 5;
+}
+
 .sl-event-count {
     font-size: 13px;
     color: var(--text-muted);
@@ -851,13 +872,20 @@ body {
 
 .event-row {
     display: grid;
-    grid-template-columns: 100px 56px 30px var(--event-type-width, 400px) 6px 1fr;
+    grid-template-columns: 36px 100px 56px 30px var(--event-type-width, 400px) 6px 1fr;
     gap: 4px;
     align-items: center;
     padding: 5px 10px;
     border-bottom: 1px solid var(--border-light);
     cursor: pointer;
     min-height: 32px;
+}
+
+.event-seq {
+    color: var(--text-muted);
+    font-size: 11px;
+    text-align: right;
+    font-family: var(--font-mono);
 }
 
 .event-col-resize {
